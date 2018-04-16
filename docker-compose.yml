@@ -1,0 +1,37 @@
+version: '2'
+services:
+  web:
+    restart: always
+    build: .
+    container_name: steward_cont
+    ports:
+     - "5000:3000"
+    environment:
+     - NODE_ENV=production
+     - DB_1_PORT_27017_TCP_ADDR=db
+    depends_on:
+     - db
+    volumes_from:
+     - web-data
+  web-data:
+    build: .
+    entrypoint: /bin/true
+    volumes:
+     - ./:/opt/steward_cont
+     - /opt/steward_cont/node_modules
+     - /opt/steward_cont/public
+     - /opt/steward_cont/uploads
+  db:
+    image: mongo
+    restart: always
+    ports:
+     - "27017:27017"
+    volumes_from:
+      - db-data
+  db-data:
+    image: mongo
+    volumes:
+      - /data/db
+      - /var/lib/mongodb
+      - /var/log/mongodb
+    entrypoint: /bin/true 
