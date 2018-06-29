@@ -2,24 +2,127 @@
 #
 # Check https://circleci.com/docs/2.0/language-javascript/ for more details
 #
-machine:
-  services:
-    - docker
-
-dependencies:
-  post:
-    #- docker-compose build .
-    - docker build -t $AWS_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/steward-ecr:$CIRCLE_SHA1 .
-
-#test:
-  #post:
-  #  - docker run -d -p 8080:8080 --name sample-go-webapp $AWS_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/go-sample-webapp:$CIRCLE_SHA1; sleep 10
-  #  - curl --retry 10 --retry-delay 5 localhost:8080 | grep "Hello World!"
-
-deployment:
-  prod:
-    branch: master
-    commands:
-      - ./deploy.sh
-
-
+version: 2
+jobs:
+  build:
+    working_directory: ~/yourapprootdir
+    docker:
+      # specify the version you desire here
+      - image: circleci/node:8.11.1
+        environment:
+          #AWS_ACCOUNT_ID: 
+          CIRCLE_TEST_REPORTS: test-results/
+          CIRCLE_ARTIFACTS: artifacts/
+    steps:
+      - checkout
+      - setup_remote_docker:
+          reusable: true
+          exclusive: false
+      - run:
+          name: Install NPM Modules
+          working_directory: ~/yourapprootdir
+          command: |
+            npm install
+      # Install AWS CLI
+      # - include aws cli ci docker: 
+      #     https://github.com/circleci/circleci-images/issues/53
+      # - use global install for aws and pip instead of --user:
+      #     https://discuss.circleci.com/t/how-to-add-a-path-to-path-in-circle-2-0/11554
+      - run: sudo apt-get update && sudo apt-get install -qq -y python-pip libpython-dev
+      - run: curl -O https://bootstrap.pypa.io/get-pip.py && sudo python get-pip.py
+      - run: sudo pip install -q awscli --upgrade
+      - run: sudo curl -o /usr/local/bin/ecs-cli https://s3.amazonaws.com/amazon-ecs-cli/ecs-cli-linux-amd64-latest
+      - run: sudo chmod +x /usr/local/bin/ecs-cli
+      #- run: sudo pip install -q 
+      - save_cache:
+          name: "Saving Backend Node Cache"
+          key: node_requirements-{{ .Branch }}-{{ checksum "~/yourapprootdir/package.json"}}
+          paths:
+          - "~/yourapprootdir/node_modules"
+      #- store_test_results:
+          #path: $CIRCLE_TEST_REPORTS
+      - run:
+          name : Creating Environment
+          command: |
+            if [ "${CIRCLE_BRANCH}" == "master" ]; then
+              echo "NODE_ENV=production" >> .env
+            elif [ "${CIRCLE_BRANCH}" == "development" ]; then
+              echo "NODE_ENV=dev-server" >> .env
+            else
+              echo "Branch does not have deployment: ${CIRCLE_BRANCH}"
+            fi
+      - run:
+          name : Building Upload Dir
+          command: |
+            mkdir 0777 uploads
+      - run:
+          name: Build Docker Image
+          command: |
+            if [ "${CIRCLE_BRANCH}" == "circle-ci" ]; then
+              echo "Building Production..."
+              #docker-compose up -f docker-compose-production.yaml --build
+              docker build -t buildname -f Dockerfile-production .
+              #chmod +x scripts/build_image.sh
+              #./scripts/build_image.sh production
+            elif [ "${CIRCLE_BRANCH}" == "development" ]; then
+              echo "Building Staging"
+              #chmod +x scripts/build_image.sh
+              #./scripts/build_image.sh staging
+              docker build -t buildname -f Dockerfile .
+            else
+              echo "Branch does not have deployment: ${CIRCLE_BRANCH}"
+            fi
+      - deploy:
+          working_directory: ~/yourapprootdir
+          name: Tag and Push Docker Image to ECR
+          command: |
+            if [ "${CIRCLE_BRANCH}" == "master" ]; then
+              echo "Tagging Production..."
+              chmod +x ./scripts/tag_push_image.sh
+              ./scripts/tag_push_image.sh
+            elif [ "${CIRCLE_BRANCH}" == "development" ]; then
+              echo "Tagging Staging"
+              #chmod +x scripts/tag_push_image.sh
+              #./scripts/tag_push_image.sh staging
+              chmod +x ./scripts/staging/tag_push_image.sh
+              ./scripts/staging/tag_push_image.sh
+            else
+              echo "Branch does not have deployment: ${CIRCLE_BRANCH}"
+            fi
+      - deploy:
+          working_directory: ~/yourapprootdir
+          name: Deploy Docker Image to ECS
+          command: |
+            if [ "${CIRCLE_BRANCH}" == "circle-ci" ]; then
+              echo "Deploying Production..."
+              chmod +x ./scripts/deploy.sh
+              ./scripts/deploy.sh
+            elif [ "${CIRCLE_BRANCH}" == "development" ]; then
+              echo "Deploying Staging"
+              chmod +x ./scripts/staging/deploy.sh
+              ./scripts/staging/deploy.sh
+              #chmod +x scripts/deploy_image.sh
+              #./scripts/deploy_image.sh staging
+            else
+              echo "Branch does not have deployment: ${CIRCLE_BRANCH}"
+            fi
+      - run:
+          name: On Success
+          command: |
+            if [ "${CIRCLE_BRANCH}" == "circle-ci" ]; then
+               echo "Successfully Deployed Master"
+            elif [ "${CIRCLE_BRANCH}" == "development" ]; then
+              echo "Successfully Deployed Staging"
+            fi 
+          when: on_success
+      - run: 
+          name: On Failure
+          command: |
+            if [ "${CIRCLE_BRANCH}" == "circle-ci" ]; then
+                echo "Deployment of Master Failed, rolling back migrations"
+            elif [ "${CIRCLE_BRANCH}" == "development" ]; then
+                echo "Deployment of Staging Failed, rolling back migrations"
+                cd cli 
+            fi
+          when: on_fail
+          
