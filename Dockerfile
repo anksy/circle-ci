@@ -27,8 +27,6 @@ EXPOSE 80 443 8035
 
 # Set development environment as default
 ENV NODE_ENV production
-#ENV MONGODB_URL mongodb://stewarXUsr7:GfcVrE45332ewwrt^_*#Ght@localhost/stewardX?authSource=stewardX
-#
 
 # Install Utilities
 RUN apt-get update -q  \
